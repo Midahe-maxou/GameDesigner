@@ -1,0 +1,251 @@
+#include "GraphicComponents.h.old"
+
+#include <windows.h>
+#include <winbase.h>
+#include <winuser.h>
+#include <combaseapi.h>
+#include <wincodec.h>
+#include <d2d1.h>
+
+#include "fctdef.h"
+#include "EventHandler.h"
+#include "WindowClass.h"
+
+#pragma comment(lib, "d2d1")
+
+
+
+/********************/
+/*		 Image		*/
+/********************/
+
+
+/**** Constructors ****/
+
+Image::Image(_In_ const D2D1_POINT_2F& pos, _In_ const wchar_t* imageName)
+{
+	__super::setPos(pos);
+
+	IWICImagingFactory* pImageFactory	= nullptr;
+	IWICBitmapDecoder* pDecoder			= nullptr;
+	IWICBitmapFrameDecode* pFrame		= nullptr;
+
+	throwOnFail(CoInitialize(NULL));
+	HRESULT hr = CoCreateInstance(
+		CLSID_WICImagingFactory,
+		NULL,
+		CLSCTX_INPROC_SERVER,
+		__uuidof(IWICImagingFactory),
+		reinterpret_cast<void**>(&pImageFactory)
+	);
+	CoUninitialize();
+
+	throwOnFail(hr); // Ensure CoUninitialize() is called.
+
+	throwOnFail(
+		pImageFactory->CreateDecoderFromFilename(
+			imageName,
+			NULL,
+			GENERIC_READ,
+			WICDecodeMetadataCacheOnLoad,
+			&pDecoder
+		)
+	);
+	throwOnFail(pDecoder->GetFrame(0, &pFrame));
+	throwOnFail(pImageFactory->CreateFormatConverter(&m_pConverter));
+	throwOnFail(
+		m_pConverter->Initialize(
+			pFrame,
+			GUID_WICPixelFormat32bppPBGRA,
+			WICBitmapDitherTypeNone,
+			NULL,
+			0.0f,
+			WICBitmapPaletteTypeCustom
+		)
+	);
+
+	safeRelease(pImageFactory);
+	safeRelease(pDecoder);
+	safeRelease(pFrame);
+}
+
+
+Image::Image(_In_ const wchar_t* imageName)
+	:Image({ 0.0f, 0.0f }, imageName)
+{}
+
+
+Image::Image(_In_ D2D1_POINT_2F pos, _In_ IWICFormatConverter* pConverter)
+	:m_pConverter(pConverter)
+{
+	__super::setPos(pos);
+}
+
+
+/**** Methods ****/
+
+
+void Image::draw(_In_ HWND hwnd, _In_ ID2D1HwndRenderTarget* renderTarget)
+{
+	if(m_pBitmap == nullptr)
+		throwOnFail(renderTarget->CreateBitmapFromWicBitmap(m_pConverter, &m_pBitmap));
+	D2D1_SIZE_F size = m_pBitmap->GetSize();
+	D2D1_POINT_2F pos = this->getPos();
+	D2D1_RECT_F rect = { pos.x, pos.y, pos.x + size.width, pos.y + size.height };
+	renderTarget->DrawBitmap(m_pBitmap, rect);
+}
+
+void Image::reconstruct() noexcept
+{
+	m_pBitmap = nullptr;
+}
+
+D2D1_SIZE_F Image::getSize()
+{
+	if (m_pBitmap == nullptr) return { 0.0f, 0.0f };
+	return m_pBitmap->GetSize();
+}
+
+Image::~Image()
+{
+}
+
+
+
+/****************************/
+/*		AnimatedImage		*/
+/****************************/
+
+
+/**** Constructors ****/
+
+AnimatedImage::AnimatedImage(_In_ const D2D1_POINT_2F& pos, _In_ const wchar_t* imageName)
+{
+	__super::setPos(pos);
+
+	IWICImagingFactory* pImageFactory	= nullptr;
+	IWICBitmapDecoder* pDecoder			= nullptr;
+
+	throwOnFail(CoInitialize(NULL));
+	HRESULT hr = CoCreateInstance(
+		CLSID_WICImagingFactory,
+		NULL,
+		CLSCTX_INPROC_SERVER,
+		__uuidof(IWICImagingFactory),
+		reinterpret_cast<void**>(&pImageFactory)
+	);
+	CoUninitialize();
+	throwOnFail(hr); // Ensures CoUninitialize() is called.
+
+	throwOnFail(
+		pImageFactory->CreateDecoderFromFilename(
+			imageName,
+			NULL,
+			GENERIC_READ,
+			WICDecodeMetadataCacheOnLoad,
+			&pDecoder
+		)
+	);
+
+	IWICFormatConverter* pConverter		= nullptr;
+	IWICBitmapFrameDecode* pFrame		= nullptr;
+	UINT nbFrame;
+	throwOnFail(pDecoder->GetFrameCount(&nbFrame));
+	m_images.reserve(nbFrame);
+	m_nbFrame = nbFrame - 1; //TODO: Why -1 ?!
+
+	for (UINT frame = 0; frame < nbFrame; frame++)
+	{
+		throwOnFail(pDecoder->GetFrame(frame, &pFrame));
+		throwOnFail(pImageFactory->CreateFormatConverter(&pConverter));
+		throwOnFail(
+			pConverter->Initialize(
+				pFrame,
+				GUID_WICPixelFormat32bppPBGRA,
+				WICBitmapDitherTypeNone,
+				NULL,
+				0.0f,
+				WICBitmapPaletteTypeCustom
+			)
+		);
+		Image im(pos, pConverter);
+		m_images.push_back(std::make_unique<Image>(im));
+		safeRelease(pFrame);
+	}
+	
+	safeRelease(pConverter);
+	safeRelease(pDecoder);
+	safeRelease(pImageFactory);
+}
+
+AnimatedImage::AnimatedImage(_In_ const wchar_t* imageName)
+	:AnimatedImage( {0.0f, 0.0f }, imageName)
+{
+}
+
+AnimatedImage::AnimatedImage(AnimatedImage&& other) noexcept
+{
+	m_currentFrame = other.m_currentFrame;
+	m_images = std::move(other.m_images);
+	m_window = other.m_window;
+	m_nbFrame = other.m_nbFrame;
+
+	for (std::unique_ptr<Image>& im : other.m_images)
+	{
+		im = nullptr;
+	}
+}
+
+
+/**** Operators ****/
+
+AnimatedImage& AnimatedImage::operator=(AnimatedImage&& other) noexcept
+{
+	if (this != &other)
+	{
+		m_currentFrame = other.m_currentFrame;
+		m_images = std::move(other.m_images);
+		m_window = other.m_window;
+		m_nbFrame = other.m_nbFrame;
+
+		for (std::unique_ptr<Image>& im : other.m_images)
+		{
+			im = nullptr;
+		}
+	}
+	return *this;
+}
+
+
+/**** Methods ****/
+
+
+void AnimatedImage::draw(_In_ HWND hwnd, _In_ ID2D1HwndRenderTarget* renderTarget)
+{
+	std::unique_ptr<Image>& im = m_images[m_currentFrame];
+	im->draw(hwnd, renderTarget);
+	//m_currentFrame = (m_currentFrame + 1) % (m_nbFrame);
+}
+
+void AnimatedImage::reconstruct() noexcept
+{
+	for (std::unique_ptr<Image>& im : m_images)
+		im->reconstruct();
+}
+
+//TODO: remove
+LRESULT onKeyDown(HWND hwnd, WPARAM wParam, LPARAM lParam, void* context)
+{
+	AnimatedImage* image = reinterpret_cast<AnimatedImage*>(context);
+	unsigned int frame = image->getCurrentFrame();
+	unsigned int maxFrame = image->getNbFrame();
+	image->setCurrentFrame((frame + 1) % maxFrame);
+	return S_OK;
+}
+
+bool AnimatedImage::initialize(void* window) noexcept
+{
+	__super::initialize(window);
+	EventHandler::registerEvent(WM_KEYDOWN, onKeyDown, this);
+	return true;
+}
