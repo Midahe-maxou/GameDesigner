@@ -1,6 +1,3 @@
-/*suture sagittale
-suture lamboïde*/
-
 #include <Windows.h>
 #include <WinBase.h>
 #include <WinUser.h>
@@ -20,7 +17,7 @@ suture lamboïde*/
 
 int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance , _In_ PSTR lpCmdLine, _In_ int nCmdShow)
 {
-	BaseWindow baseWindow = BaseWindow(hInstance, L"heheheha", L"Saluté");
+	BaseWindow baseWindow = BaseWindow(hInstance, L"heheheha", L"SalutÃ©");
 	baseWindow.show(nCmdShow);
 
 	Graphics::Image im({ 100.0f, 100.0f }, L"Images\\gif.gif");
